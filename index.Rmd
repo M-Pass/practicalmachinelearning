@@ -1,0 +1,107 @@
+---
+title: "Prediction Assignment"
+author: "Marcello Passarelli"
+date: "11/04/2016"
+output: html_document
+---
+
+# Environment setting
+
+Just loading packages, setting a seed, defining a function to check prediction accuracy...
+
+```{r, results='hide'}
+rm(list=ls())
+library(caret)
+set.seed(108)
+
+accCheck <- function(true, pred)
+  {
+  print(sum(pred == true) / length(true))
+  }
+
+```
+
+# Data selection
+
+First of all, let's look at the different predictors we have available. 
+There is no codebook for the dataset, so we have to guess the variables' meaning, and the overall dataset structure. 
+
+The dataset appears to be composed of small time series of different measurements, and the time series *may* be what's called "window" in the dataset. For some of the windows, but not all, we appear to have summary statistics (e.g. skewness, kurtosis, minimum and maximum for that time serie...)
+
+However, a quick look at the testing dataset revels that will NOT predict classes based on a full time serie. We will, instead, have just a "snapshot" of a particular moment at our disposal, and we will not be able to analyze the dynamic of the particular movement whose class we are trying to predict. 
+
+Fair enough; in a normal setting, I would not ignore the time-dependency of the measures. But we are forced to in this setting, and so we will consider every measurement as independent. 
+
+```{r}
+full <- read.csv("../pml-training.csv")
+trainIdx <- createDataPartition(full$classe, p=.7, list=FALSE)
+training <- full[trainIdx,]
+testing <- full[-trainIdx,]
+
+tokeep <- sapply(training, function(x){sum(is.na(x))}) < (nrow(training)*0.1)
+# removing predictors with more than 10% missing data
+
+training <- training[,tokeep]
+
+tokeep <- c(8:11, 21:42, 49:51, 61:73, 83:93)
+# keeping only the measurements at each time point; removing the summary statistics for the time series. 
+
+training <- training[,tokeep]
+```
+
+# Simple predictions
+
+Now, let's choose a method to predict the classes. 
+I will go for the overkill and try three computationally expensive, very different prediction methods: 
+
+- A Random Forest
+- A Quadratic Discriminant Analysis
+- A GAM Multinomial Logistic Regression
+
+All three predict a categorical response, but with radically different approaches. Interpretability is not an issue here (we aim only at predicting with high accuracy), so we can really go wild. Let's see how the three methods compare...
+
+```{r, results='hide'}
+
+fit1 <- train(classe ~., method="parRF", data=training, preProcess=c("center", "scale"))
+accCheck(training$classe, predict(fit1, newdata=training))
+
+fit2 <- train(classe ~., method="qda", data=training, preProcess=c("center", "scale"))
+accCheck(training$classe, predict(fit2, newdata=training))
+
+fit3 <- train(classe ~., method="multinom", data=training, preProcess=c("center", "scale"), trace=FALSE)
+accCheck(training$classe, predict(fit3, newdata=training))
+
+```
+
+The QDA appears to perform far better than the multinomial regression, with an accuracy of 90% vs 74%. 
+However, the random forest achieves 100% accuracy. I planned to stack the three models into a single übermodel, but if one of them has 100% accuracy, there's no point: it will *always* be selected over the other two. 
+So I ask myself: is this 100% accuracy due to overfitting? Let's see...
+
+# Out-of-sample testing
+
+Before fitting the models, if you noticed, I took away 30% of the training data to use as a test data (so, what the instructors call "testing data" will actually be my validation data). 
+
+Let's see how the models fare on the test data!
+
+```{r}
+new1 <- predict(fit1, newdata=testing)
+new2 <- predict(fit2, newdata=testing)
+new3 <- predict(fit3, newdata=testing)
+accCheck(testing$classe, new1)
+accCheck(testing$classe, new2)
+accCheck(testing$classe, new3)
+```
+
+With over 99% accuracy, the random forest seem to be - by far - the best of the three. It seems the huge computational time is worth it. 
+
+# Validation set
+
+We will use our beautiful forest to predict the unknown cases. 
+
+```{r}
+valid <- read.csv("../pml-testing.csv")
+
+predict(fit1,newdata=valid)
+```
+
+I expect them to be correct: we had 99% percent accuracy on the test sample, after all. 
